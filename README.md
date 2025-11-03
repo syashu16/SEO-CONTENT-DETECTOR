@@ -41,7 +41,8 @@ jupyter notebook notebooks/seo_pipeline.ipynb
 ### Content Analysis
 
 - **Total Pages Processed**: 81
-- **Duplicate Pairs Found**: 78
+- **Valid Pages Analyzed**: 69 (excluding 12 parsing failures)
+- **Duplicate Pairs Found**: 20 (realistic similarity detection)
 - **Thin Content Pages**: 12 (14.8%)
 
 ### Quality Distribution
@@ -49,6 +50,13 @@ jupyter notebook notebooks/seo_pipeline.ipynb
 - **High Quality**: 5 pages (6.2%)
 - **Medium Quality**: 31 pages (38.3%)
 - **Low Quality**: 45 pages (55.6%)
+
+### Duplicate Detection (Corrected)
+
+- **Similarity Range**: 0.805 - 0.916 (realistic scores)
+- **Mean Similarity**: 0.244 
+- **Duplication Rate**: 29.0% among valid content
+- **Threshold Used**: 0.80
 
 ### Top Features (by importance)
 
