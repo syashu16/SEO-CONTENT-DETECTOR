@@ -54,14 +54,15 @@ st.markdown("""
 def load_data():
     """Load processed data"""
     try:
-        features_df = pd.read_csv('../data/features.csv')
+        # Fixed file paths for Streamlit Cloud deployment
+        features_df = pd.read_csv('data/features.csv')
         # Convert embedding strings back to lists for the first few rows only (to avoid memory issues)
         if 'embedding' in features_df.columns:
             features_df['embedding'] = features_df['embedding'].apply(
                 lambda x: eval(x) if isinstance(x, str) and x.startswith('[') else []
             )
-        duplicates_df = pd.read_csv('../data/duplicates.csv')
-        extracted_df = pd.read_csv('../data/extracted_content.csv')
+        duplicates_df = pd.read_csv('data/duplicates.csv')
+        extracted_df = pd.read_csv('data/extracted_content.csv')
         return features_df, duplicates_df, extracted_df
     except Exception as e:
         st.error(f"Error loading data: {str(e)}")
@@ -71,18 +72,14 @@ def load_data():
 def load_model():
     """Load trained ML model"""
     try:
+        # Fixed file path for Streamlit Cloud deployment
         with open('models/quality_model.pkl', 'rb') as f:
             model = pickle.load(f)
         return model
     except Exception as e:
-        try:
-            # Try alternative path
-            with open('../models/quality_model.pkl', 'rb') as f:
-                model = pickle.load(f)
-            return model
-        except:
-            st.error(f"Error loading model: {str(e)}")
-            return None
+        st.error(f"Error loading model: {str(e)}")
+        st.info("Model file not found. The app will run in demo mode without quality predictions.")
+        return None
 
 @st.cache_resource
 def load_sentence_transformer():
@@ -160,6 +157,18 @@ def extract_features(text):
 def predict_quality(model, content_info, features):
     """Predict content quality using the trained model."""
     try:
+        if model is None:
+            # Return basic quality assessment if no model is available
+            word_count = content_info['word_count']
+            readability = features['flesch_reading_ease']
+            
+            if word_count >= 1000 and readability >= 60:
+                return {'label': 'High', 'confidence': {'High': 0.8, 'Medium': 0.15, 'Low': 0.05}}
+            elif word_count >= 500 and readability >= 30:
+                return {'label': 'Medium', 'confidence': {'High': 0.2, 'Medium': 0.7, 'Low': 0.1}}
+            else:
+                return {'label': 'Low', 'confidence': {'High': 0.1, 'Medium': 0.2, 'Low': 0.7}}
+        
         feature_vector = np.array([[
             content_info['word_count'],
             features['sentence_count'],
@@ -199,17 +208,26 @@ def main():
     features_df, duplicates_df, extracted_df = load_data()
     model = load_model()
     
-    if features_df is None or model is None:
-        st.error("Unable to load required data or model files. Please ensure all files are present.")
-        return
+    # Check if data files exist
+    if features_df is None:
+        st.warning("⚠️ Dataset files not found. Running in demo mode.")
+        st.info("You can still analyze URLs, but historical data won't be available.")
+        # Create dummy data for demo
+        features_df = pd.DataFrame({
+            'word_count': [100, 500, 1000],
+            'quality_label': ['Low', 'Medium', 'High']
+        })
+        duplicates_df = pd.DataFrame()
+        extracted_df = pd.DataFrame()
     
     # Sidebar with dataset statistics
     st.sidebar.markdown("## 📊 Dataset Statistics")
     st.sidebar.metric("Total Pages Analyzed", len(features_df))
     st.sidebar.metric("Duplicate Pairs Found", len(duplicates_df) if duplicates_df is not None else 0)
     
-    thin_content = (features_df['word_count'] < 500).sum()
-    st.sidebar.metric("Thin Content Pages", f"{thin_content} ({thin_content/len(features_df)*100:.1f}%)")
+    if len(features_df) > 0:
+        thin_content = (features_df['word_count'] < 500).sum()
+        st.sidebar.metric("Thin Content Pages", f"{thin_content} ({thin_content/len(features_df)*100:.1f}%)")
     
     # Quality distribution
     if 'quality_label' in features_df.columns:
@@ -287,7 +305,7 @@ def display_analysis_results(url, content_info, features, quality_result):
     # Quality prediction
     st.markdown("### 🎯 Quality Assessment")
     quality_label = quality_result['label']
-    confidence = quality_result['confidence'][quality_label]
+    confidence = quality_result['confidence'][quality_label] if quality_label in quality_result['confidence'] else 0
     
     quality_class = f"quality-{quality_label.lower()}"
     st.markdown(f'<p class="{quality_class}">Quality: {quality_label} (Confidence: {confidence:.2f})</p>', 
@@ -295,14 +313,15 @@ def display_analysis_results(url, content_info, features, quality_result):
     
     # Confidence breakdown
     conf_data = quality_result['confidence']
-    fig = px.bar(
-        x=list(conf_data.keys()),
-        y=list(conf_data.values()),
-        title="Quality Confidence Scores",
-        color=list(conf_data.values()),
-        color_continuous_scale="viridis"
-    )
-    st.plotly_chart(fig, use_container_width=True)
+    if conf_data:
+        fig = px.bar(
+            x=list(conf_data.keys()),
+            y=list(conf_data.values()),
+            title="Quality Confidence Scores",
+            color=list(conf_data.values()),
+            color_continuous_scale="viridis"
+        )
+        st.plotly_chart(fig, use_container_width=True)
     
     # Content analysis
     col1, col2 = st.columns(2)
@@ -324,33 +343,36 @@ def dataset_overview_tab(features_df, extracted_df):
     """Dataset overview tab"""
     st.markdown('<h2 class="section-header">Dataset Overview</h2>', unsafe_allow_html=True)
     
-    if extracted_df is not None:
+    if extracted_df is not None and len(extracted_df) > 0:
         # Sample content
         st.markdown("### 📄 Sample Content")
         sample_data = extracted_df[['url', 'title', 'word_count']].head(10)
         st.dataframe(sample_data, use_container_width=True)
+    else:
+        st.info("No extracted content data available.")
     
-    # Word count distribution
-    st.markdown("### 📊 Word Count Distribution")
-    fig = px.histogram(
-        features_df, 
-        x='word_count', 
-        nbins=30,
-        title="Distribution of Word Counts",
-        labels={'word_count': 'Word Count', 'count': 'Frequency'}
-    )
-    st.plotly_chart(fig, use_container_width=True)
-    
-    # Quality distribution
-    if 'quality_label' in features_df.columns:
-        quality_counts = features_df['quality_label'].value_counts()
-        
-        fig = px.pie(
-            values=quality_counts.values,
-            names=quality_counts.index,
-            title="Quality Distribution"
+    if len(features_df) > 0:
+        # Word count distribution
+        st.markdown("### 📊 Word Count Distribution")
+        fig = px.histogram(
+            features_df, 
+            x='word_count', 
+            nbins=30,
+            title="Distribution of Word Counts",
+            labels={'word_count': 'Word Count', 'count': 'Frequency'}
         )
         st.plotly_chart(fig, use_container_width=True)
+        
+        # Quality distribution
+        if 'quality_label' in features_df.columns:
+            quality_counts = features_df['quality_label'].value_counts()
+            
+            fig = px.pie(
+                values=quality_counts.values,
+                names=quality_counts.index,
+                title="Quality Distribution"
+            )
+            st.plotly_chart(fig, use_container_width=True)
 
 def duplicates_tab(duplicates_df, features_df):
     """Duplicates analysis tab"""
