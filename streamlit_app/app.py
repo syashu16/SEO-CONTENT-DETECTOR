@@ -6,6 +6,8 @@ import pickle
 import requests
 import re
 import textstat
+import time
+import random
 from bs4 import BeautifulSoup
 from sklearn.metrics.pairwise import cosine_similarity
 from sentence_transformers import SentenceTransformer
@@ -85,6 +87,92 @@ def load_model():
 def load_sentence_transformer():
     """Load sentence transformer model"""
     return SentenceTransformer('all-MiniLM-L6-v2')
+
+def get_random_user_agent():
+    """Get a random user agent string to avoid bot detection"""
+    user_agents = [
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15',
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0',
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:120.0) Gecko/20100101 Firefox/120.0'
+    ]
+    return random.choice(user_agents)
+
+def fetch_url_with_retry(url, max_retries=3):
+    """Fetch URL with multiple retry strategies to avoid 403 errors"""
+    
+    for attempt in range(max_retries):
+        try:
+            # Different header strategies for each attempt
+            if attempt == 0:
+                # Standard headers
+                headers = {
+                    'User-Agent': get_random_user_agent(),
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                    'Accept-Language': 'en-US,en;q=0.5',
+                    'Accept-Encoding': 'gzip, deflate',
+                    'Connection': 'keep-alive',
+                    'Upgrade-Insecure-Requests': '1',
+                }
+            elif attempt == 1:
+                # More browser-like headers
+                headers = {
+                    'User-Agent': get_random_user_agent(),
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+                    'Accept-Language': 'en-US,en;q=0.9',
+                    'Accept-Encoding': 'gzip, deflate, br',
+                    'Connection': 'keep-alive',
+                    'Sec-Fetch-Dest': 'document',
+                    'Sec-Fetch-Mode': 'navigate',
+                    'Sec-Fetch-Site': 'none',
+                    'Sec-Fetch-User': '?1',
+                    'Cache-Control': 'max-age=0',
+                    'Upgrade-Insecure-Requests': '1',
+                }
+            else:
+                # Minimal headers as last resort
+                headers = {
+                    'User-Agent': get_random_user_agent(),
+                    'Accept': '*/*',
+                }
+            
+            # Add random delay between attempts
+            if attempt > 0:
+                time.sleep(random.uniform(1, 3))
+            
+            # Create session for better connection handling
+            session = requests.Session()
+            session.headers.update(headers)
+            
+            # Make request with timeout
+            response = session.get(url, timeout=15, allow_redirects=True)
+            
+            # Check if request was successful
+            if response.status_code == 200:
+                return response
+            elif response.status_code == 403:
+                if attempt < max_retries - 1:
+                    continue  # Try next strategy
+                else:
+                    raise requests.exceptions.RequestException(f"403 Forbidden: Website blocks automated access")
+            else:
+                response.raise_for_status()
+                
+        except requests.exceptions.Timeout:
+            if attempt < max_retries - 1:
+                continue
+            else:
+                raise requests.exceptions.RequestException(f"Request timeout after {max_retries} attempts")
+        except requests.exceptions.RequestException as e:
+            if attempt < max_retries - 1:
+                continue
+            else:
+                raise e
+    
+    # If all attempts failed
+    raise requests.exceptions.RequestException(f"Failed to fetch URL after {max_retries} attempts")
 
 def extract_content_from_html(html_content):
     """Extract title, body text, and word count from HTML content."""
@@ -256,6 +344,19 @@ def url_analysis_tab(model, features_df):
     # URL input
     url = st.text_input("Enter URL to analyze:", placeholder="https://example.com/article")
     
+    # Add some example URLs that are more likely to work
+    st.markdown("**Try these example URLs:**")
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        if st.button("📰 BBC News", help="Analyze BBC article"):
+            url = "https://www.bbc.com/news"
+    with col2:
+        if st.button("📖 Wikipedia", help="Analyze Wikipedia page"):
+            url = "https://en.wikipedia.org/wiki/Machine_learning"
+    with col3:
+        if st.button("🌐 Example.com", help="Test with example site"):
+            url = "https://example.com"
+    
     col1, col2 = st.columns([1, 4])
     with col1:
         analyze_button = st.button("🔍 Analyze", type="primary")
@@ -263,10 +364,8 @@ def url_analysis_tab(model, features_df):
     if analyze_button and url:
         with st.spinner("Analyzing URL..."):
             try:
-                # Scrape and analyze
-                headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-                response = requests.get(url, headers=headers, timeout=10)
-                response.raise_for_status()
+                # Use improved fetch function
+                response = fetch_url_with_retry(url)
                 
                 # Extract content
                 content_info = extract_content_from_html(response.text)
@@ -279,9 +378,30 @@ def url_analysis_tab(model, features_df):
                 display_analysis_results(url, content_info, features, quality_result)
                 
             except requests.exceptions.RequestException as e:
-                st.error(f"Failed to fetch URL: {str(e)}")
+                error_msg = str(e)
+                if "403" in error_msg:
+                    st.error("🚫 **Website Access Blocked**")
+                    st.warning("""
+                    This website blocks automated access (403 Forbidden). This is common for:
+                    - Corporate websites (ConnectWise, etc.)
+                    - Sites with strong anti-bot protection
+                    - Cloudflare-protected sites
+                    
+                    **Try these alternatives:**
+                    - News websites (BBC, Reuters, etc.)
+                    - Wikipedia articles
+                    - Blog posts or documentation sites
+                    - Educational institution websites
+                    """)
+                elif "timeout" in error_msg.lower():
+                    st.error("⏱️ **Request Timeout** - The website took too long to respond.")
+                else:
+                    st.error(f"❌ **Failed to fetch URL:** {error_msg}")
+                    
+                st.info("💡 **Tip:** Some websites work better than others. Try different URLs if you encounter issues.")
+                
             except Exception as e:
-                st.error(f"Analysis failed: {str(e)}")
+                st.error(f"🔧 **Analysis failed:** {str(e)}")
 
 def display_analysis_results(url, content_info, features, quality_result):
     """Display analysis results"""
@@ -321,7 +441,7 @@ def display_analysis_results(url, content_info, features, quality_result):
             color=list(conf_data.values()),
             color_continuous_scale="viridis"
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
     
     # Content analysis
     col1, col2 = st.columns(2)
@@ -347,7 +467,7 @@ def dataset_overview_tab(features_df, extracted_df):
         # Sample content
         st.markdown("### 📄 Sample Content")
         sample_data = extracted_df[['url', 'title', 'word_count']].head(10)
-        st.dataframe(sample_data, use_container_width=True)
+        st.dataframe(sample_data, width="stretch")
     else:
         st.info("No extracted content data available.")
     
@@ -361,7 +481,7 @@ def dataset_overview_tab(features_df, extracted_df):
             title="Distribution of Word Counts",
             labels={'word_count': 'Word Count', 'count': 'Frequency'}
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
         
         # Quality distribution
         if 'quality_label' in features_df.columns:
@@ -372,7 +492,7 @@ def dataset_overview_tab(features_df, extracted_df):
                 names=quality_counts.index,
                 title="Quality Distribution"
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
 
 def duplicates_tab(duplicates_df, features_df):
     """Duplicates analysis tab"""
@@ -389,7 +509,7 @@ def duplicates_tab(duplicates_df, features_df):
             title="Distribution of Similarity Scores",
             labels={'similarity': 'Similarity Score', 'count': 'Frequency'}
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
         
         # Top duplicates
         st.markdown("### 🔝 Top Duplicate Pairs")
